@@ -1,0 +1,42 @@
+#!/sbin/runscript
+# Copyright 1999-2012 Gentoo Foundation
+# Distributed under the terms of the GNU General Public License v2
+# $Header: $
+#
+# This is an /etc/init.d Gentoo style script to run the backup_scheduler.py
+# script. It uses start-stop-daemon which is invoked with --pidfile,
+# --make-pidfile (since backup_scheduler.py is not making one) and
+# --background option which forces backup_scheduler.py to run in the
+# background.
+
+pid_file="/var/run/backup_scheduler.pid"
+log_file="/var/log/backup_scheduler.log"
+stamp_file="/var/lib/pybackup/backup_scheduler.stamps"
+
+# depend() {
+#     after net
+# }
+
+start() {
+    ebegin "Starting backup scheduler"
+    start-stop-daemon --start --make-pidfile \
+		    --nice 10 \
+		    --pidfile ${pid_file} --background \
+		    --user root \
+		    --exec /dane/working_copy/pybackup/backup_scheduler.py -- \
+		    --log  ${log_file} \
+		    --stamp_file ${stamp_file}
+    eend ${?}
+}
+
+stop() {
+    ebegin "Stopping backup scheduler"
+    start-stop-daemon --stop --pidfile ${pid_file}
+    eend ${?}
+}
+
+restart() {
+    ebegin "Restarting backup schduler"
+    stop
+    start
+}
