@@ -920,8 +920,67 @@ if __name__ == '__main__':
     parser.add_option("--get_member", dest="member", default="", help="get a file from the backup")
     # Encrypt (force that backup is not encrypted)
     parser.add_option("-E", "--noencrypt", dest="force_no_encrypt", default=False, action="store_true", help="do not encrypt backup")
+    # Daemonise (detach): this is used when backup.py is run by udev
+    parser.add_option("-d", "--daemon", dest="daemon", default=False, action="store_true", help="detach and run in the background")
 
     (options, args) = parser.parse_args()
+
+    def createDaemon():
+        # Detach. 
+        # credits: http://code.activestate.com/recipes/278731-creating-a-daemon-the-python-way/
+        # see ~/python/bin/daemon.py
+
+        # Why two forks: 
+        # It always takes two forks to make a daemon. This is tradition. Some
+        # UNIXes don't require it. It doesn't hurt to do it on all UNIXes. The
+        # reason some UNIXes require it is to make sure that the daemon process
+        # is NOT a session leader. A session leader process may attempt to
+        # aquire a controlling terminal. By definition a daemon does not have
+        # a controlling terminal. This is one of the steps that might not be
+        # strictly necessary, but it will eliminate one possible source for
+        # faults.
+        try:
+            pid = os.fork()
+        except OSError, e:
+            raise Exception, "%s [%d]" % (e.strerror, e.errno)
+        if (pid == 0):
+            os.setsid()
+            import signal
+            signal.signal(signal.SIGHUP, signal.SIG_IGN)
+            try:
+                pid = os.fork()
+            except OSError, e:
+                raise Exception, "%s [%d]" % (e.strerror, e.errno)
+            if (pid == 0):
+                os.umask(0)
+            else:
+                os._exit(0)
+        else:
+            os._exit(0)
+
+        # close all open file descriptors
+        import resource
+        MAXFD = 1024
+        maxfd = resource.getrlimit(resource.RLIMIT_NOFILE)[1]  # maximal number of open file descriptors 
+                                                              # also available through os.sysconf("SC_OPEN_MAX") 
+        if (maxfd == resource.RLIM_INFINITY):
+            maxfd = MAXFD
+        for fd in range(0, maxfd):
+            # Iterate through and close all all file descriptors.
+            try:
+                os.close(fd)
+            except OSError:  # fd wasn't open to begin with
+                pass
+
+        if (hasattr(os, "devnull")):
+            os.open(os.devnull, os.O_RDWR)
+        else:
+            os.open("/dev/null", os.O_RDWR)
+        os.dup2(0,1)
+        os.dup2(0,2)
+    if options.daemon:
+        createDaemon()
+
     if len(args) >= 2:
         target = args[1]
     else:
