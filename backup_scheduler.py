@@ -41,19 +41,23 @@ parser  = OptionParser()
 parser.add_option("-v", "--verbose", dest="verbose", default=False, action="store_true")
 parser.add_option("-l", "--log", dest="log_file", default="/var/log/backup_scheduler.log")
 parser.add_option("-s", "--stamp_file", dest="scheduler_stamps_file", default="/var/lib/pybackup/backup_scheduler.stamps")
+parser.add_option("-d", "--daemon", dest="daemon", default=False, action="store_true", help="detach and run in the background")
 (options, args) = parser.parse_args()
+
+if options.daemon:
+    from backup import createDaemon
+    createDaemon()
+
 if not os.path.exists('/var/lib/pybackup'):
     os.makedirs('/var/lib/pybackup')
 
 def log(message):
     if not options.log_file is None:
         try:
-            file_o = open(options.log_file, 'a')
+            with open(options.log_file, 'a') as log_sock:
+                log_sock.write("[%s]: %s\n" % ( datetime.now(), message ))
         except IOError as e:
             print("line %d: %s" % ( sys.exc_info()[2].tb_lineno, e))
-        else:
-            file_o.write("[%s]: %s\n" % ( datetime.now(), message ))
-            file_o.close()
 
 # Parse the config file:
 config_file = os.path.expandvars("${HOME}/.backup.rc")

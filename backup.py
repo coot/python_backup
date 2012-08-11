@@ -4,7 +4,9 @@
 # XXX: compression=None is not working
 
 """
-Todo: when config file contains two the same keywords, configoj raises: configobj.DuplicateError.
+Todo: write a logger (which also will work for daemon). It should record python
+      errors (this could be done through file descriptors).
+Todo: when config file contains two the same keywords, configobj raises: configobj.DuplicateError.
 Todo: --wake-up (-w): send signal.SIGUSR1 to backup_scheduler.py.
 """
 
@@ -25,21 +27,6 @@ Arguments
         [where]  = destination target (like for scp) (overwrites target value in
                    section {what} of .backup.rc)
 '''
-
-# Parse config file
-config_file = os.path.expandvars("${HOME}/.backup.rc")
-try:
-    config = ConfigObj( config_file, write_empty_values=True, unrepr=True )
-except UnreprError as e:
-    if __name__ == "__main__":
-        error_msg = "%s/.backup.rc: unknown name or type in value at line %d.\n" % (os.environ["HOME"], e.line_number)
-        sys.stderr.write(error_msg)
-        sys.exit(1)
-    else:
-         raise e
-except ParseError as e:
-    print("ParseError in %s. %s" % (config_file, e.msg))
-    sys.exit(1)
 
 def human_size(size_bytes):
     """
@@ -204,7 +191,7 @@ class Backup(object):
         """
         self.name           - name of the backup section in ${HOME}/.backup.rc
         self.time           - time stamp recorded in the self.stamp_file
-                              it is updated by: self.find_files(), 
+                              it is updated by: self.find_files(),
         self.stamp_file     - the stamp file to use
         self.path           - path to the archive
         self.file_list      - list of files to archive
@@ -898,6 +885,60 @@ class Backup(object):
                 return None
             tar_o.close()
 
+def createDaemon():
+    # Detach. 
+    # credits: http://code.activestate.com/recipes/278731-creating-a-daemon-the-python-way/
+    # see ~/python/bin/daemon.py
+
+    # Why two forks: 
+    # It always takes two forks to make a daemon. This is tradition. Some
+    # UNIXes don't require it. It doesn't hurt to do it on all UNIXes. The
+    # reason some UNIXes require it is to make sure that the daemon process
+    # is NOT a session leader. A session leader process may attempt to
+    # aquire a controlling terminal. By definition a daemon does not have
+    # a controlling terminal. This is one of the steps that might not be
+    # strictly necessary, but it will eliminate one possible source for
+    # faults.
+    try:
+        pid = os.fork()
+    except OSError, e:
+        raise Exception, "%s [%d]" % (e.strerror, e.errno)
+    if (pid == 0):
+        os.setsid()
+        import signal
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        try:
+            pid = os.fork()
+        except OSError, e:
+            raise Exception, "%s [%d]" % (e.strerror, e.errno)
+        if (pid == 0):
+            os.umask(0)
+        else:
+            os._exit(0)
+    else:
+        os._exit(0)
+
+    # close all open file descriptors
+    import resource
+    MAXFD = 1024
+    maxfd = resource.getrlimit(resource.RLIMIT_NOFILE)[1]  # maximal number of open file descriptors 
+                                                          # also available through os.sysconf("SC_OPEN_MAX") 
+    if (maxfd == resource.RLIM_INFINITY):
+        maxfd = MAXFD
+    for fd in range(0, maxfd):
+        # Iterate through and close all all file descriptors.
+        try:
+            os.close(fd)
+        except OSError:  # fd wasn't open to begin with
+            pass
+
+    if (hasattr(os, "devnull")):
+        os.open(os.devnull, os.O_RDWR)
+    else:
+        os.open("/dev/null", os.O_RDWR)
+    os.dup2(0,1)
+    os.dup2(0,2)
+
 if __name__ == '__main__':
     usage   = "%prog [options] {what[:where]} ..."
     parser  = OptionParser(usage=usage)
@@ -925,59 +966,26 @@ if __name__ == '__main__':
 
     (options, args) = parser.parse_args()
 
-    def createDaemon():
-        # Detach. 
-        # credits: http://code.activestate.com/recipes/278731-creating-a-daemon-the-python-way/
-        # see ~/python/bin/daemon.py
-
-        # Why two forks: 
-        # It always takes two forks to make a daemon. This is tradition. Some
-        # UNIXes don't require it. It doesn't hurt to do it on all UNIXes. The
-        # reason some UNIXes require it is to make sure that the daemon process
-        # is NOT a session leader. A session leader process may attempt to
-        # aquire a controlling terminal. By definition a daemon does not have
-        # a controlling terminal. This is one of the steps that might not be
-        # strictly necessary, but it will eliminate one possible source for
-        # faults.
-        try:
-            pid = os.fork()
-        except OSError, e:
-            raise Exception, "%s [%d]" % (e.strerror, e.errno)
-        if (pid == 0):
-            os.setsid()
-            import signal
-            signal.signal(signal.SIGHUP, signal.SIG_IGN)
-            try:
-                pid = os.fork()
-            except OSError, e:
-                raise Exception, "%s [%d]" % (e.strerror, e.errno)
-            if (pid == 0):
-                os.umask(0)
-            else:
-                os._exit(0)
+    # Parse the config file:
+    if not os.path.isfile(options.config_file):
+        # the ${HOME} variable might not be set, for example when executed by
+        # udev (see the default value of options.config_file).
+        config_file = "/root/.backup.rc"
+    else:
+        config_file = options.config_file
+    try:
+        config = ConfigObj( config_file, write_empty_values=True, unrepr=True )
+    except UnreprError as e:
+        if __name__ == "__main__":
+            error_msg = "%s/.backup.rc: unknown name or type in value at line %d.\n" % (os.environ["HOME"], e.line_number)
+            sys.stderr.write(error_msg)
+            sys.exit(1)
         else:
-            os._exit(0)
+             raise e
+    except ParseError as e:
+        print("ParseError in %s. %s" % (config_file, e.msg))
+        sys.exit(1)
 
-        # close all open file descriptors
-        import resource
-        MAXFD = 1024
-        maxfd = resource.getrlimit(resource.RLIMIT_NOFILE)[1]  # maximal number of open file descriptors 
-                                                              # also available through os.sysconf("SC_OPEN_MAX") 
-        if (maxfd == resource.RLIM_INFINITY):
-            maxfd = MAXFD
-        for fd in range(0, maxfd):
-            # Iterate through and close all all file descriptors.
-            try:
-                os.close(fd)
-            except OSError:  # fd wasn't open to begin with
-                pass
-
-        if (hasattr(os, "devnull")):
-            os.open(os.devnull, os.O_RDWR)
-        else:
-            os.open("/dev/null", os.O_RDWR)
-        os.dup2(0,1)
-        os.dup2(0,2)
     if options.daemon:
         createDaemon()
 
