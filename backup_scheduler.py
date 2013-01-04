@@ -5,6 +5,9 @@ Author: Marcin Szamotulski
 
 """
 Todo:
+    send email if the size of the backup exceeds a given value. We can
+    implement it using the smptlib module.
+Todo:
     the scheduler should checkout on start up if the last backup was done.
     (or at least is should have this as an option), i.e. if the turn has passed
     for makeing a backup.
@@ -16,9 +19,14 @@ Todo:
 """
 
 
-import time, traceback, sys, os, os.path, atexit, signal
+import time
+import traceback
+import sys
+import os
+import os.path
+import atexit
+import signal
 import locale
-locale.setlocale(locale.LC_TIME, os.getenv("LC_TIME"))
 from datetime import datetime
 try:
     import cpickle as pickle
@@ -34,15 +42,20 @@ from configobj import ConfigObj
 from configobj import UnreprError
 from optparse import OptionParser
 
+if not hasattr(os, 'EX_OK'):
+    os.EX_OK=0
+if not hasattr(os, 'EX_CONFIG'):
+    os.EX_CONFIG=78
 
+locale.setlocale(locale.LC_TIME, os.getenv("LC_TIME"))
 
-# Parse the options:
 parser  = OptionParser()
 parser.add_option("-v", "--verbose", dest="verbose", default=False, action="store_true")
 parser.add_option("-l", "--log", dest="log_file", default="/var/log/backup_scheduler.log")
 parser.add_option("-s", "--stamp_file", dest="scheduler_stamps_file", default="/var/lib/pybackup/backup_scheduler.stamps")
 parser.add_option("-d", "--daemon", dest="daemon", default=False, action="store_true", help="detach and run in the background")
 (options, args) = parser.parse_args()
+parser.destroy()
 
 if options.daemon:
     from backup import createDaemon
@@ -60,14 +73,14 @@ def log(message):
             print("line %d: %s" % ( sys.exc_info()[2].tb_lineno, e))
 
 # Parse the config file:
-config_file = os.path.expandvars("${HOME}/.backup.rc")
+config_file = os.path.expanduser("~/.backup.rc")
 try:
     config = ConfigObj(config_file, write_empty_values=True, unrepr=True )
 except UnreprError as e:
     error_msg = " line %d: %s/.backup.rc: unknown name or type in value." % (e.line_number, os.environ["HOME"])
     sys.stderr.write(error_msg+"\n")
     log(error_msg)
-    sys.exit(1)
+    sys.exit(os.EX_CONFIG)
 
 
 
@@ -200,7 +213,7 @@ def reconfigure_sched(signal, frame):
         error_msg = " line %d: %s/.backup.rc: unknown name or type in value." % (e.line_number, os.environ["HOME"])
         sys.stderr.write(error_msg+"\n")
         log(error_msg)
-        sys.exit(1)
+        sys.exit(os.EX_CONFIG)
     schedule_jobs(config)
     log("INFO: reconfiguring scheduler")
     sched.print_jobs()
@@ -214,6 +227,14 @@ def backup_all(signal, frame):
     for title in config:
         cron_STAMP(title)
 signal.signal( signal.SIGUSR1, backup_all )
+
+# def stop(signal, frame):
+    # with open("/tmp/stop", "a") as file:
+        # file.write("%s at: %s\n" % (signal, time.strftime("%x %X", time.localtime(time.time()))))
+# 
+# signal.signal( signal.SIGCONT, stop )
+# signal.signal( signal.SIGHUP, stop )
+# signal.signal( signal.SIGBUS, stop )
 
 def listen(event):
     if event.exception:
@@ -248,4 +269,4 @@ try:
         # When used pass instead of time.sleep() function the script uses 100% of cpu.
         time.sleep(60)
 except KeyboardInterrupt:
-    sys.exit(0)
+    sys.exit(os.EX_OK)

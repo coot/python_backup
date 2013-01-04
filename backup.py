@@ -10,15 +10,33 @@ Todo: when config file contains two the same keywords, configobj raises: configo
 Todo: --wake-up (-w): send signal.SIGUSR1 to backup_scheduler.py.
 """
 
-import sys, os, os.path, re, tarfile, glob, subprocess, shutil
+__all__ = [ 'Backup', 'createDaemon', 'read_options' ]
+
+import sys
+import os
+import os.path
+import re
+import tarfile
+import glob
+import subprocess
+import shutil
 import locale
-locale.setlocale(locale.LC_TIME, os.getenv("LC_TIME"))
 import tempfile
 import paramiko, time
 import GnuPGInterface
 from configobj import ConfigObj, UnreprError, ParseError
 from optparse import OptionParser
 
+if not hasattr(os, 'EX_OK'):
+    os.EX_OK=0
+if not hasattr(os, 'EX_USAGE'):
+    os.EX_USAGE=64
+if not hasattr(os, 'EX_CONFIG'):
+    os.EX_CONFIG=78
+if not hasattr(os, 'EX_SOFTWARE'):
+    os.EX_SOFTWARE=70
+
+locale.setlocale(locale.LC_TIME, os.getenv("LC_TIME"))
 '''
 Arguments
 {what[:where]}
@@ -53,8 +71,8 @@ def human_size(size_bytes):
 
     return "%s %s" % (formatted_size, suffix)
 
-def replace_empty(val,pattern,exclude_pattern):
-    # Replace matching pattern with pattern if '' or not present. 
+def replace_empty(val, pattern, exclude_pattern):
+    # Replace matching pattern with pattern if '' or not present.
     # Replace excludeing pattern with exclude_pattern if '' or nor present.
 
     try:
@@ -81,7 +99,7 @@ def read_options(options):
         archive_path                = options['archive_path']
     except KeyError:
         print("There is no value for archive in section: \"%s\"")
-        sys.exit(1)
+        sys.exit(os.EX_USAGE)
     try:
         tg                          = options['target']
     except KeyError:
@@ -102,7 +120,7 @@ def read_options(options):
     except KeyError:
         print("There is no value for dir in section: \"%s\"" % title)
         # XXX: raise an exception which can be cought by the backup_scheduler.py.
-        sys.exit(1)
+        sys.exit(os.EX_CONFIG)
     try:
         compression                 = options['compression']
     except KeyError:
@@ -118,7 +136,7 @@ def read_options(options):
         # expandvars and glob 'dir' values.
         g_dir  = os.path.expandvars(dictionary['dir'])
         for item in [ 'include_pattern', 'include_path_pattern', 'include_files', 'exclude_pattern', 'exclude_dir_pattern', 'exclude_path_pattern', 'exclude_dirs', 'exclude_dirs', 'max_size']:
-            if  item != 'include_files' and item != 'exclude_dirs'and item != 'max_size':
+            if  item != 'include_files' and item != 'exclude_dirs' and item != 'max_size':
                 default_value = options.get(item, '')
             elif item == 'exclude_dirs' or item == 'include_files':
                 default_value = options.get(item, [])
@@ -140,14 +158,23 @@ def read_options(options):
                     dictionary['max_size']=size
             dictionary[item]=dictionary.get(item, default_value)
             if item == 'exclude_dirs' and not isinstance(dictionary[item], list):
-                print(dictionary[item])
-                print("Backup Error: The value of exclude_dirs in dir[%s] in section 'Backup %s' is not a list!" % (dictionary[dir], title))
-                sys.exit(2)
-        for path in glob.iglob(g_dir):
-            if os.path.isdir(path):
-                return_dictionary=dictionary.copy()
-                return_dictionary['dir']=path
-                return_dirs.append(return_dictionary)
+                print("\033[1;31mBackup Error: The value of exclude_dirs in dir[%s] in section 'Backup %s' is not a list!\033[0m" % (dictionary[dir], title))
+                sys.exit(os.EX_CONFIG)
+        if not os.path.isdir(g_dir):
+            print("\033[1;31mBackup Warning: \"%s\" is not a valid directory.\033[0m" % g_dir)
+        else:
+            test = True
+            for path in glob.iglob(g_dir):
+                test = False
+                if os.path.isdir(path):
+                    return_dictionary=dictionary.copy()
+                    return_dictionary['dir']=path
+                    return_dirs.append(return_dictionary)
+                else:
+                    print("\033[1;31mBackup Warning: \"%s\" is not a directory.\033[0m" % path)
+            if test:
+                print("Backup Warning: \"%s\" doesn't contain any directories.")
+
 
     try:
         reciepient              = options['reciepient']
@@ -187,7 +214,7 @@ class Backup(object):
 
     Only the put() method updates the stamp file by default.
     """
-    def __init__( self, name, options, search=True, keep=False, gnupg=True):
+    def __init__(self, name, options, search=True, keep=False, gnupg=True):
         """
         self.name           - name of the backup section in ${HOME}/.backup.rc
         self.time           - time stamp recorded in the self.stamp_file
@@ -338,7 +365,7 @@ class Backup(object):
                     file_list.append(os.path.join(root,file))
         return [file_list,size_excluded]
 
-    def __find_files( self, dirs, input_files ):
+    def __find_files(self, dirs, input_files ):
         # Make list of files using 'dirs' and 'input_files' (options).
 
         files= []
@@ -354,8 +381,10 @@ class Backup(object):
             exclude_path_pattern    = entry['exclude_path_pattern']
             exclude_dirs            = entry['exclude_dirs']
             max_size                = entry['max_size']
+            sys.stdout.write("  Entring: %s ... " % directory)
             n_files, s_excluded = self.__scan_directory(directory, include_pattern, include_path_pattern, \
                 exclude_pattern, exclude_path_pattern, exclude_dir_pattern, exclude_dirs, max_size)
+            sys.stdout.write(" found %d files.\n" % len(n_files))
             files.extend(n_files)
             for file in map(lambda file: os.path.join(directory, file), include_files):
                 if not file in files:
@@ -414,37 +443,35 @@ class Backup(object):
                 print("Warning: can not make a backup copy of the archive.")
         # posix format of tar files solves unicode problems for tar files.
         try:
-            tar_o=tarfile.open(archive_path+ext, 'w'+mode)
+            with tarfile.open(archive_path+ext, 'w'+mode) as tar_o:
+                tar_o.PAX_FORMAT=True
+                tar_stamp_path = os.path.join(os.path.dirname(archive_path), 'archive_stamp')
+                try:
+                    tar_stamp = open(tar_stamp_path, 'w')
+                except IOError as e:
+                    print("line %d: %s" % (sys.exc_info()[2].tb_lineno, e))
+                else:
+                    tar_stamp.write('%s\t\t%s\n' % ( stamp, time.strftime('%x %X %Z', time.localtime(stamp)) ) )
+                    tar_stamp.close()
+                tar_o.add(tar_stamp_path, 'archive_stamp')
+                os.remove(tar_stamp_path)
+                for file in files:
+                    try:
+                        tar_o.add(file)
+                    except IOError, e:
+                        if e.errno == 13:
+                            print("line %d: %s" % (sys.exc_info()[2].tb_lineno, e))
+                        else:
+                            raise
+                    except OSError, e:
+                        if e.errno == 2:
+                            print("line %d: %s" % (sys.exc_info()[2].tb_lineno, e))
+                        elif e.errno ==13:
+                            print("line %d: %s" % (sys.exc_info()[2].tb_lineno, e))
+                        else:
+                            raise
         except IOError as e:
             print("line %d: %s" % (sys.exc_info()[2].tb_lineno, e))
-        else:
-            tar_o.PAX_FORMAT=True
-            tar_stamp_path = os.path.join(os.path.dirname(archive_path), 'archive_stamp')
-            try:
-                tar_stamp = open(tar_stamp_path, 'w')
-            except IOError as e:
-                print("line %d: %s" % (sys.exc_info()[2].tb_lineno, e))
-            else:
-                tar_stamp.write('%s\t\t%s\n' % ( stamp, time.strftime('%x %X %Z', time.localtime(stamp)) ) )
-                tar_stamp.close()
-            tar_o.add(tar_stamp_path, 'archive_stamp')
-            os.remove(tar_stamp_path)
-            for file in files:
-                try:
-                    tar_o.add(file)
-                except IOError, e:
-                    if e.errno == 13:
-                        print("line %d: %s" % (sys.exc_info()[2].tb_lineno, e))
-                    else:
-                        raise
-                except OSError, e:
-                    if e.errno == 2:
-                        print("line %d: %s" % (sys.exc_info()[2].tb_lineno, e))
-                    elif e.errno ==13:
-                        print("line %d: %s" % (sys.exc_info()[2].tb_lineno, e))
-                    else:
-                        raise
-            tar_o.close()
         if compression == '7z':
             ext = '.7z'
             try:
@@ -477,7 +504,6 @@ class Backup(object):
         calls _find_files method.'''
         self.time = time.time()
         self.file_list, self.size_excluded = self.__find_files(self.option_dict['dirs'], self.option_dict['input_files'])
-        return
 
     def __encrypt(self):
         gnupg = GnuPGInterface.GnuPG()
@@ -485,31 +511,23 @@ class Backup(object):
             print("Encrypting.")
             gnupg.options.reciepients=[self.reciepient]
             try:
-                input_fo  = open(self.path)
-                output_fo = open(self.path+'.gpg', 'w')
+                with open(self.path) as input_fo, open(self.path+'.gpg', 'w') as output_fo:
+                    gnupg_enc = gnupg.run(['--encrypt'], attach_fhs={'stdin' : input_fo, 'stdout' : output_fo})
+                    gnupg_enc.wait()
+                    self.encrypted = True
             except IOError as e:
                 print(str(e))
-            else:
-                gnupg_enc = gnupg.run(['--encrypt'], attach_fhs={'stdin' : input_fo, 'stdout' : output_fo})
-                gnupg_enc.wait()
-                self.encrypted = True
-                input_fo.close()
-                output_fo.close()
         elif not self.passphrase == '':
             print("Encrypting.")
             try:
-                input_fo  = open(self.path)
-                output_fo = open(self.path+'.gpg', 'w')
+                with open(self.path) as input_fo, open(self.path+'.gpg', 'w') as output_fo:
+                    gnupg_enc = gnupg.run(['--encrypt'], create_fhs=['passphrase'], attach_fhs={'stdin' : input_fo, 'stdout' : output_fo})
+                    gnupg_enc.handlers['passphrase'].write(self.passphrase)
+                    gnupg_enc.handlers['passphrase'].close()
+                    gnupg_enc.wait()
+                    self.encrypted = True
             except IOError as e:
                 print(str(e))
-            else:
-                gnupg_enc = gnupg.run(['--encrypt'], create_fhs=['passphrase'], attach_fhs={'stdin' : input_fo, 'stdout' : output_fo})
-                gnupg_enc.handlers['passphrase'].write(self.passphrase)
-                gnupg_enc.handlers['passphrase'].close()
-                gnupg_enc.wait()
-                self.encrypted = True
-                input_fo.close()
-                output_fo.close()
         else:
             return
         if self.encrypted:
@@ -523,31 +541,27 @@ class Backup(object):
     def __decrypt(self):
         if self.encrypted:
             try:
-                input_fo   = open(self.path)
-                output_fo  = open(os.path.splitext(self.path)[0], 'w')
+                if not self.recipient == '':
+                    with open(self.path) as input_fo, open(os.path.splitext(self.path)[0], 'w') as output_fo:
+                        gnupg.options.reciepients=[self.reciepients]
+                        gnupg_enc  = gnupg.run(['--decrypt'], attach_fhs={'stdin' : input_fo, 'stdout' : output_fo})
+                        gnupg_enc.wait()
+                elif not self.passphrase == '':
+                    with open(self.path) as input_fo, open(os.path.splitext(self.path)[0], 'w') as output_fo:
+                        gnupg_enc = gnupg.run(['--decrypt'], create_fhs=['passphrase'], attach_fhs={'stdin' : input_fo, 'stdout' : output_fo})
+                        gnupg_enc.handlers['passphrase'].write(self.passphrase)
+                        gnupg_enc.handlers['passphrase'].close()
+                        gnupg_enc.wait()
+                self.encrypted = False
             except IOError as e:
                 print(str(e))
-            else:
-                if not self.recipient == '':
-                    gnupg.options.reciepients=[self.reciepients]
-                    gnupg_enc  = gnupg.run(['--decrypt'], attach_fhs={'stdin' : input_fo, 'stdout' : output_fo})
-                elif not self.passphrase == '':
-                    input_fo   = open(self.path)
-                    output_fo  = open(os.path.splitext(self.path)[0], 'w')
-                    gnupg_enc = gnupg.run(['--decrypt'], create_fhs=['passphrase'], attach_fhs={'stdin' : input_fo, 'stdout' : output_fo})
-                    gnupg_enc.handlers['passphrase'].write(self.passphrase)
-                    gnupg_enc.handlers['passphrase'].close()
-                gnupg_enc.wait()
-                self.encrypted = False
-                input_fo.close()
-                output_fo.close()
             if not self.encrypted:
                 # Remove gpg file:
                 os.remove(self.path)
                 self.path = os.path.splitext(self.path)[0]
             else:
                 print("Could not decrypt the backup file '%s'" % self.path)
-                sys.exit(1)
+                sys.exit(os.EX_SOFTWARE)
 
     def __server_put( self, user, server, local_path, remote_path ):
         # send backup_file (full path) to user@server:/backup_dir
@@ -683,18 +697,18 @@ class Backup(object):
         s_excluded=map(join_logline,s_excluded)
 
         try:
-            log=open(self.log_file, 'w')
+            with open(self.log_file, 'w') as log:
+                try:
+                    tarball_size = human_size(os.path.getsize(self.path))
+                except OSError:
+                    tarball_size = "error"
+                log.writelines(['Size of files: %s\n' % '(not implemented)',
+                    'Size of tarball: %s\n' % tarball_size,
+                    'Number of files: %d\n' % len(sorted_log)])
+                log.writelines(['Files excluded by size:\n']+s_excluded+["\n"])
+                log.writelines(['Files archived:\n']+sorted_log)
         except IOError as e:
             print("line %d: %s" % (sys.exc_info()[2].tb_lineno, e))
-        else:
-            try:
-                tarball_size = human_size(os.path.getsize(self.path))
-            except OSError:
-                tarball_size = "error"
-            log.writelines(['Size of files: '+human_size(self.size)+'\n', 'Size of tarball: '+tarball_size+'\n', 'Number of files: '+str(len(sorted_log))+'\n'])
-            log.writelines(['Files excluded by size:\n']+s_excluded+["\n"])
-            log.writelines(['Files archived:\n']+sorted_log)
-            log.close
 
     def server_put(self):
         [user, server, directory] = self._target
@@ -707,13 +721,11 @@ class Backup(object):
 
     def update_stamp(self):
         try:
-            stamp_fo = open(self.stamp_file, 'r')
-            # We read the stamp_file, to filter the stamps.
-            stamps = stamp_fo.readlines()
+            with open(self.stamp_file, 'r') as stamp_fo:
+                # We read the stamp_file, to filter the stamps.
+                stamps = stamp_fo.readlines()
         except IOError as e:
             stamps = []
-        else:
-            stamp_fo.close()
         """
         Format of the stamp file:
             backup_name         time_stamp      time_stamp_human_readable
@@ -724,24 +736,20 @@ class Backup(object):
         stamps=filter( f_stamps, stamps )
         stamps.append('%s\t\t\t%f\t\t%s\n' % (self.name, self.time, time.strftime('%x %X %Z', time.localtime(self.time))))
         try:
-            stamp_fo = open(self.stamp_file, 'w')
+            with open(self.stamp_file, 'w') as stamp_fo:
+                stamp_fo.writelines(stamps)
         except IOError as e:
             print("line %d: %s" % (sys.exc_info()[2].tb_lineno, e))
-        else:
-            stamp_fo.writelines(stamps)
-            stamp_fo.close()
 
     def get_stamp(self):
         # Read the stamp file and return the last stamp corresponding to self.name.
         # The file contains time stamps of backups copied using server_put() method.
         try:
-            stamp_fo = open(self.stamp_file, 'r')
+            with open(self.stamp_file, 'r') as stamp_fo:
+                stamps = stamp_fo.readlines()
         except IOError as e:
             stamps=[]
             print("backup.py: line %d: %s" % (sys.exc_info()[2].tb_lineno, e))
-        else:
-            stamps = stamp_fo.readlines()
-            stamp_fo.close()
         def g_time(val):
             match = re.match(re.escape(self.name)+'\s*(\d+\.\d+)',val)
             if match:
@@ -813,7 +821,7 @@ class Backup(object):
 
     def find_file( self, pattern, basename=True ):
         # find file matching pattern in self. But copy the backup file into
-        # tmpdir and unpack (7z) it there if necessary. 
+        # tmpdir and unpack (7z) it there if necessary.
         # basename = True : match the pattern against basenames not the full path.
 
         self.unpack()
@@ -827,21 +835,19 @@ class Backup(object):
             self.compression = None
             mode = ""
         try:
-            tar_o = tarfile.open(path, "r"+mode)
+            with tarfile.open(path, "r"+mode) as tar_o:
+                names = tar_o.getnames()
+                def filter_f(val):
+                    if basename:
+                        val = os.path.basename(val)
+                    if re.search(pattern, val):
+                        return True
+                    else:
+                        return False
+                names = filter(filter_f, names)
+                print("\n".join(names))
         except IOError as e:
             print(str(e))
-        else:
-            names = tar_o.getnames()
-            def filter_f(val):
-                if basename:
-                    val = os.path.basename(val)
-                if re.search(pattern, val):
-                    return True
-                else:
-                    return False
-            names = filter(filter_f, names)
-            print("\n".join(names))
-            tar_o.close()
 
     def get_member( self, member, directory='__selfpath__' ):
         # get member {member} of the archive to directory {directory}.
@@ -862,35 +868,32 @@ class Backup(object):
         else:
             mode = ''
         try:
-            tar_o = tarfile.open(self.path, 'r'+mode)
+            with tarfile.open(self.path, 'r'+mode) as tar_o:
+                file_tarinfo=tar_o.getmember(member)
+                if file_tarinfo.isfile():
+                    fo = tar_o.extractfile(member)
+                    flines = fo.read()
+                    fo.close()
+                    fpath = os.path.join(directory,os.path.basename(file_tarinfo.name))
+                    # The file will be overwritten without warning.
+                    try:
+                        fpath_o = open(fpath, 'w')
+                    except IOError as e:
+                        print(str(e))
+                    else:
+                        fpath_o.write(flines)
+                    return fpath
+                else:
+                    return None
         except IOError as e:
             print(str(e))
-        else:
-            file_tarinfo=tar_o.getmember(member)
-            if file_tarinfo.isfile():
-                fo = tar_o.extractfile(member)
-                flines = fo.read()
-                fo.close()
-                fpath = os.path.join(directory,os.path.basename(file_tarinfo.name))
-                # The file will be overwritten without warning.
-                try:
-                    fpath_o = open(fpath, 'w')
-                except IOError as e:
-                    print(str(e))
-                else:
-                    fpath_o.write(flines)
-                    fpath_o.close()
-                return fpath
-            else:
-                return None
-            tar_o.close()
 
 def createDaemon():
-    # Detach. 
+    # Detach.
     # credits: http://code.activestate.com/recipes/278731-creating-a-daemon-the-python-way/
     # see ~/python/bin/daemon.py
 
-    # Why two forks: 
+    # Why two forks:
     # It always takes two forks to make a daemon. This is tradition. Some
     # UNIXes don't require it. It doesn't hurt to do it on all UNIXes. The
     # reason some UNIXes require it is to make sure that the daemon process
@@ -914,15 +917,15 @@ def createDaemon():
         if (pid == 0):
             os.umask(0)
         else:
-            os._exit(0)
+            os._exit(os.EX_OK)
     else:
-        os._exit(0)
+        os._exit(os.EX_OK)
 
     # close all open file descriptors
     import resource
     MAXFD = 1024
-    maxfd = resource.getrlimit(resource.RLIMIT_NOFILE)[1]  # maximal number of open file descriptors 
-                                                          # also available through os.sysconf("SC_OPEN_MAX") 
+    maxfd = resource.getrlimit(resource.RLIMIT_NOFILE)[1]  # maximal number of open file descriptors
+                                                          # also available through os.sysconf("SC_OPEN_MAX")
     if (maxfd == resource.RLIM_INFINITY):
         maxfd = MAXFD
     for fd in range(0, maxfd):
@@ -965,6 +968,7 @@ if __name__ == '__main__':
     parser.add_option("-d", "--daemon", dest="daemon", default=False, action="store_true", help="detach and run in the background")
 
     (options, args) = parser.parse_args()
+    parser.destroy()
 
     # Parse the config file:
     if not os.path.isfile(options.config_file):
@@ -974,17 +978,15 @@ if __name__ == '__main__':
     else:
         config_file = options.config_file
     try:
-        config = ConfigObj( config_file, write_empty_values=True, unrepr=True )
+        config = ConfigObj(config_file, write_empty_values=True, unrepr=True)
     except UnreprError as e:
         if __name__ == "__main__":
             error_msg = "%s/.backup.rc: unknown name or type in value at line %d.\n" % (os.environ["HOME"], e.line_number)
             sys.stderr.write(error_msg)
-            sys.exit(1)
-        else:
-             raise e
+            sys.exit(os.EX_CONFIG)
     except ParseError as e:
         print("ParseError in %s. %s" % (config_file, e.msg))
-        sys.exit(1)
+        sys.exit(os.EX_CONFIG)
 
     if options.daemon:
         createDaemon()
@@ -993,7 +995,6 @@ if __name__ == '__main__':
         target = args[1]
     else:
         target = None
-    config_file=options.config_file
     fpattern = options.fpattern
     member = options.member
     try:
@@ -1004,8 +1005,11 @@ if __name__ == '__main__':
         print("{what}[:where] is a list of section names of the config file ${HOME}/.backup.rc,")
         print("[:where] can be a directory name (with escaped spaces )or a remote location: user@server:file_path.")
         print("         It will overwrite the target variable from the config file.")
-        sys.exit(1)
+        sys.exit(os.EX_USAGE)
     if fpattern != "":
+        if not name in config:
+            print("\033[1;31mError: there is no section '%s' in '%s'\033[0m" % (name, config_file))
+            sys.exit(os.EX_DATAERR)
         backup = Backup( name, config[name], search=False, keep=options.keep )
         if not target == None:
             backup.target(target)
@@ -1016,20 +1020,26 @@ if __name__ == '__main__':
         # whole archive. Another solution is to unpack it on the server but
         # this requires 7z.
         backup.find_file(fpattern)
-        sys.exit(0)
+        sys.exit(os.EX_OK)
     if member != "":
+        if not name in config:
+            print("\033[1;31mError: there is no section '%s' in '%s'\033[0m" % (name, config_file))
+            sys.exit(os.EX_DATAERR)
         backup = Backup( name, config[name], search=False, keep=options.keep )
         if not target == None:
             backup.target(target)
         # Get the member using full or relative (to the current directory) path:
         mpath=backup.get_member(os.path.normpath(os.path.join(os.getcwd(),member)))
         print(mpath)
-        sys.exit(0)
+        sys.exit(os.EX_OK)
     for arg in args:
         print(arg)
         option_match = re.match('([^:]*)(?::(.*$))?',arg)
         name = option_match.group(1)
         tg = option_match.group(2)
+        if not name in config:
+            print("\033[1;31mError: there is no section '%s' in '%s'\033[0m" % (name, config_file))
+            sys.exit(os.EX_DATAERR)
         backup = Backup( name, config[name], search=True, keep=options.keep )
         if options.force_no_encrypt:
             backup.reciepient = ''

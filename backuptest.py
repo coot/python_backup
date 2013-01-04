@@ -1,6 +1,9 @@
 #!/usr/bin/python
 
-import os, os.path, unittest, time
+import os
+import os.path
+import unittest
+import time
 from backup import Backup
 from backup import read_options
 from configobj import ConfigObj, UnreprError
