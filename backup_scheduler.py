@@ -123,8 +123,8 @@ def write_scheduler_stamps():
         try:
             with open("%s.tmp" % options.scheduler_stamps_file, 'wb') as sock:
                 pickle.dump(STAMPS, sock)
-            os.rename("%s.tmp" % (options.scheduler_stamps_file,
-                                  options.scheduler_stamps_file))
+            os.rename("%s.tmp" % options.scheduler_stamps_file,
+                      options.scheduler_stamps_file)
         except NameError as e:
             log(" write_scheduler_stamps NameError: line %d: %s"
                 % (sys.exc_info()[2].tb_lineno, e))
