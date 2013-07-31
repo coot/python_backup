@@ -97,7 +97,7 @@ def replace_empty(val, pattern, exclude_pattern):
         return val
 
 
-def read_options(options):
+def read_options(options, name=None):
     '''
     Read options from the options=config["title"] of ${HOME}/.backup.rc file
     and return a dictionary.
@@ -106,7 +106,7 @@ def read_options(options):
     try:
         archive_path = options['archive_path']
     except KeyError:
-        print("There is no value for archive in section: \"%s\"")
+        print("\"archive_path\" is not set in section \"{}\"".format(name))
         sys.exit(os.EX_USAGE)
     try:
         tg = options['target']
@@ -126,7 +126,7 @@ def read_options(options):
     try:
         dirs = options['dir']
     except KeyError:
-        print("There is no value for dir in section: \"%s\"" % title)
+        print("\"dir\" is not set in section \"{}\"".format(name))
         # XXX: raise an exception which can be cought by the
         # backup_scheduler.py.
         sys.exit(os.EX_CONFIG)
@@ -162,20 +162,20 @@ def read_options(options):
                 if match:
                     size, unit = [int(match.group(1)), match.group(2)]
                     if re.match(re.compile('kb', re.I), unit):
-                        size = size*1024
+                        size = size * 1024
                     elif re.match(re.compile('mb', re.I), unit):
-                        size = size*1024*1024
+                        size = size * (1024 ** 2)
                     elif re.match(re.compile('gb', re.I), unit):
-                        size = size*1024*1024*1024
+                        size = size * (1024 ** 3)
                     elif re.match(re.compile('tb', re.I), unit):
-                        size = size*1024*1024*1024*1024
+                        size = size * (1024 ** 4)
                     dictionary['max_size'] = size
             dictionary[item] = dictionary.get(item, default_value)
             if (item == 'exclude_dirs'
                     and not isinstance(dictionary[item], list)):
                 print("\033[1;31mBackup Error: The value of exclude_dirs "
                       "in dir[%s] in section 'Backup %s' is not a list!\033[0m"
-                      % (dictionary[dir], title)
+                      % (dictionary[dir], name)
                       )
                 sys.exit(os.EX_CONFIG)
         if not os.path.isdir(g_dir):
@@ -190,11 +190,11 @@ def read_options(options):
                     return_dictionary['dir'] = path
                     return_dirs.append(return_dictionary)
                 else:
-                    print("\033[1;31mBackup Warning: \"%s\" "
-                          "is not a directory.\033[0m" % path)
+                    print("\033[1;31mBackup Warning: \"{}\" "
+                          "is not a directory.\033[0m".format(path))
             if test:
-                print("Backup Warning: \"%s\" "
-                      "doesn't contain any directories.")
+                print("Backup Warning: \"{}\" "
+                      "doesn't contain any directories.".format(name))
 
     try:
         reciepient = options['reciepient']
@@ -221,13 +221,13 @@ class ConnectionError(Exception):
         self.info = info
 
     def __str__(self):
-        if info == "":
-            return "%s returned with error code %d " % (self.progname,
-                                                        self.return_code)
+        if self.info == "":
+            return "%s returned with error code %d" % (self.progname,
+                                                       self.return_code)
         else:
-            return "%s returned with error code %d : %s " % (self.progname,
-                                                             self.return_code,
-                                                             info)
+            return "%s returned with error code %d: %s " % (self.progname,
+                                                            self.return_code,
+                                                            self.info)
 
 
 # The main Backup class
@@ -261,7 +261,7 @@ class Backup(object):
         """
 
         self.name = name
-        self.option_dict = read_options(options)
+        self.option_dict = read_options(options, name)
         self.stamp_file = (re.match('linux', sys.platform)
                            and '/var/lib/pybackup/backup.stamps'
                            or os.path.join(os.path.dirname(
@@ -270,8 +270,8 @@ class Backup(object):
         if not os.path.exists('/var/lib/pybackup'):
             os.makedirs('/var/lib/pybackup')
         self._target = self.option_dict['target']
-        self.path = self.option_dict['archive_path']+".tar"
-        self.log_file = self.option_dict['archive_path']+".log"
+        self.path = self.option_dict['archive_path'] + ".tar"
+        self.log_file = self.option_dict['archive_path'] + ".log"
         self.compression = self.option_dict['compression']
         self.keep = keep
         self.reciepient = self.option_dict['reciepient']
@@ -281,7 +281,7 @@ class Backup(object):
         # If self.keep is True then the self.put method will not delete the
         # self.path.
         if self.compression is not None and self.compression != '':
-            self.path += "."+self.compression
+            self.path += "." + self.compression
         self.time = time.time()
         if search:
             self.file_list, self.size_excluded = \
@@ -309,10 +309,10 @@ class Backup(object):
         else:
             return "%s" % directory
 
-    def __iter__():
+    def __iter__(self):
         return self.file_list.__iter__()
 
-    def __next__():
+    def __next__(self):
         return self.file_list.__next__()
 
     def target(self, target):
@@ -344,10 +344,11 @@ class Backup(object):
 
         if ((path in [os.path.normpath(os.path.join(root_dir, directory))
                       for directory in exclude_dirs])
-           or (exclude_dir_pattern != ''
-               and re.search(exclude_dir_pattern, dirname)
-               or exclude_path_pattern != ''
-               and re.search(exclude_path_pattern, relpath))):
+                or (exclude_dir_pattern != ''
+                    and re.search(exclude_dir_pattern, dirname)
+                    or exclude_path_pattern != ''
+                    and re.search(exclude_path_pattern, relpath)
+                    )):
             return False
         else:
             return True
@@ -493,30 +494,30 @@ class Backup(object):
         if compression == "gz":
             ext = ".tar.gz"
             mode = ":gz"
-            output_path = archive_path+ext
+            output_path = archive_path + ext
         elif compression == "bz2":
             ext = ".tar.bz2"
             mode = ":bz2"
-            output_path = archive_path+ext
+            output_path = archive_path + ext
         elif compression == "7z":
             ext = ".tar"
             mode = ""
-            output_path = archive_path+".tar.7z"
+            output_path = archive_path + ".tar.7z"
         else:
             ext = ".tar"
             mode = ""
-            output_path = archive_path+ext
+            output_path = archive_path + ext
         try:
             if compression == "7z":
-                shutil.move(archive_path+ext+".7z", archive_path+ext+".7z.old")
+                shutil.move(archive_path + ext + ".7z", archive_path + ext + ".7z.old")
             else:
-                shutil.move(archive_path+ext, archive_path+ext+".old")
+                shutil.move(archive_path + ext, archive_path + ext + ".old")
         except IOError:
-            if os.path.exists(archive_path+ext+".7z"):
+            if os.path.exists(archive_path + ext + ".7z"):
                 print("Warning: can not make a backup copy of the archive.")
         # posix format of tar files solves unicode problems for tar files.
         try:
-            with tarfile.open(archive_path+ext, 'w'+mode) as tar_o:
+            with tarfile.open(archive_path + ext, 'w' + mode) as tar_o:
                 tar_o.PAX_FORMAT = True
                 tar_stamp_path = os.path.join(os.path.dirname(archive_path),
                                               'archive_stamp')
@@ -557,27 +558,27 @@ class Backup(object):
             ext = '.7z'
             try:
                 cmd = ['7z', 'a', '-mx9',
-                       archive_path+'.tar.7z',
-                       archive_path+'.tar']
+                       archive_path + '.tar.7z',
+                       archive_path + '.tar']
                 subprocess.Popen(cmd).wait()
             except:
                 # Delete the incomplete archive and raise an exception:
                 # in this way re-running make_backup() fuction will not
                 # overwrire the file archive_path+".tar.7z.old".
                 try:
-                    os.remove(archive_path+'.tar.7z')
+                    os.remove(archive_path + '.tar.7z')
                 except IOError as e:
                     print("line %d: %s" % (sys.exc_info()[2].tb_lineno, e))
                 raise
             try:
-                os.remove(archive_path+'.tar')
+                os.remove(archive_path + '.tar')
             except OSError as e:
                 print("line %d: %s" % (sys.exc_info()[2].tb_lineno, e))
-            if os.path.exists(archive_path+'.tar.7z.old'):
-                os.remove(archive_path+'.tar.7z.old')
+            if os.path.exists(archive_path + '.tar.7z.old'):
+                os.remove(archive_path + '.tar.7z.old')
         else:
-            if os.path.exists(archive_path+'.tar.7z.old'):
-                os.remove(archive_path+ext+'.old')
+            if os.path.exists(archive_path + '.tar.7z.old'):
+                os.remove(archive_path + ext + '.old')
         return output_path
 
     def find_files(self):
@@ -596,7 +597,7 @@ class Backup(object):
             gnupg.options.reciepients = [self.reciepient]
             print('reciepient: %s' % self.reciepient)
             try:
-                with open(self.path) as input_fo, open(self.path+'.gpg', 'w') as output_fo:
+                with open(self.path) as input_fo, open(self.path + '.gpg', 'w') as output_fo:
                     gnupg_enc = gnupg.run(['--encrypt'],
                                           attach_fhs={'stdin': input_fo,
                                                       'stdout': output_fo})
@@ -607,7 +608,7 @@ class Backup(object):
         elif not self.passphrase == '':
             print("Encrypting.")
             try:
-                with open(self.path) as input_fo, open(self.path+'.gpg', 'w') as output_fo:
+                with open(self.path) as input_fo, open(self.path + '.gpg', 'w') as output_fo:
                     gnupg_enc = gnupg.run(['--encrypt'],
                                           create_fhs=['passphrase'],
                                           attach_fhs={'stdin': input_fo,
@@ -629,6 +630,7 @@ class Backup(object):
             self.remove = True
 
     def __decrypt(self):
+        gnupg = GnuPGInterface.GnuPG()
         if self.encrypted:
             try:
                 if not self.recipient == '':
@@ -779,9 +781,9 @@ class Backup(object):
             size += fsize
             self.log_dict.append([file, fsize])
         self.log_dict[size] = size
-        if state == 'backuped':
-            delete_backup(self)
-            make_backup(self)
+        if self.state == 'backuped':
+            self.delete_backup(self)
+            self.make_backup(self)
 
     def log(self, sort='fsize'):
         """
@@ -806,9 +808,9 @@ class Backup(object):
 
         def join_logline(val):
             if sort == 'fsize':
-                return(human_size(val[1])+"\t"+val[0]+"\n")
+                return(human_size(val[1]) + "\t" + val[0] + "\n")
             else:
-                return(val[0]+"\t\t\t"+human_size(val[1])+"\n")
+                return(val[0] + "\t\t\t" + human_size(val[1]) + "\n")
         sorted_log = map(join_logline, sorted_log)
         s_excluded = map(join_logline, s_excluded)
 
@@ -821,8 +823,8 @@ class Backup(object):
                 log.writelines(['Size of files: %s\n' % '(not implemented)',
                                 'Size of tarball: %s\n' % tarball_size,
                                 'Number of files: %d\n' % len(sorted_log)])
-                log.writelines(['Files excluded by size:\n']+s_excluded+["\n"])
-                log.writelines(['Files archived:\n']+sorted_log)
+                log.writelines(['Files excluded by size:\n'] + s_excluded + ["\n"])
+                log.writelines(['Files archived:\n'] + sorted_log)
         except IOError as e:
             print("line %d: %s" % (sys.exc_info()[2].tb_lineno, e))
 
@@ -878,7 +880,7 @@ class Backup(object):
             print("backup.py: line %d: %s" % (sys.exc_info()[2].tb_lineno, e))
 
         def g_time(val):
-            match = re.match(re.escape(self.name)+'\s*(\d+\.\d+)',
+            match = re.match(re.escape(self.name) + '\s*(\d+\.\d+)',
                              val)
             if match:
                 return float(match.group(1))
@@ -907,7 +909,7 @@ class Backup(object):
         if (not self.keep and self._target != ['', '', '']
             and self._target
                 != ['', '', os.path.normpath(os.path.dirname(self.path))]):
-            print("Remove: "+self.path)
+            print("Remove: " + self.path)
             os.remove(self.path)
         self.update_stamp()
 
@@ -973,7 +975,7 @@ class Backup(object):
             self.compression = None
             mode = ""
         try:
-            with tarfile.open(path, "r"+mode) as tar_o:
+            with tarfile.open(self.path, "r" + mode) as tar_o:
                 names = tar_o.getnames()
 
                 def filter_f(val):
@@ -1007,7 +1009,7 @@ class Backup(object):
         else:
             mode = ''
         try:
-            with tarfile.open(self.path, 'r'+mode) as tar_o:
+            with tarfile.open(self.path, 'r' + mode) as tar_o:
                 file_tarinfo = tar_o.getmember(member)
                 if file_tarinfo.isfile():
                     fo = tar_o.extractfile(member)
