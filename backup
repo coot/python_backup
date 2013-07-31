@@ -21,9 +21,10 @@ start() {
     ebegin "Starting backup scheduler"
     start-stop-daemon --start --make-pidfile \
 		    --nice 10 \
+		    --env PYTHONPATH=$BACKUP_PYTHONPATH \
 		    --pidfile ${pid_file} --background \
 		    --user root \
-		    --exec /dane/working_copy/pybackup/backup_scheduler.py -- \
+		    --exec /data/working_copy/pybackup/backup_scheduler.py -- \
 		    --log  ${log_file} \
 		    --stamp_file ${stamp_file}
     eend ${?}
