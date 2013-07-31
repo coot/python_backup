@@ -37,7 +37,6 @@ from backup import Backup
 
 try:
     from apscheduler.scheduler import Scheduler
-    from apscheduler.scheduler import EVENT_JOB_EXECUTED
     from apscheduler.scheduler import EVENT_JOB_ERROR
 except ImportError as err:
     print(err)
@@ -88,7 +87,7 @@ try:
 except UnreprError as e:
     error_msg = " line %d: %s/.backup.rc: unknown name or type in value." \
                 % (e.line_number, os.environ["HOME"])
-    sys.stderr.write(error_msg+"\n")
+    sys.stderr.write(error_msg + "\n")
     log(error_msg)
     sys.exit(os.EX_CONFIG)
 
@@ -250,7 +249,7 @@ def reconfigure_sched(signal, frame):
     except UnreprError as e:
         error_msg = (" line %d: %s/.backup.rc: unknown name or type in value."
                      % (e.line_number, os.environ["HOME"]))
-        sys.stderr.write(error_msg+"\n")
+        sys.stderr.write(error_msg + "\n")
         log(error_msg)
         sys.exit(os.EX_CONFIG)
     schedule_jobs(config)
