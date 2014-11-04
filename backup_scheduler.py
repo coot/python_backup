@@ -281,7 +281,7 @@ def listen(event):
         if options.verbose:
             print("Listen Error: %s" % event.exception)
             print("".join(traceback.format_tb(event.traceback)))
-        log("%s at line %d" % event.exception, event.traceback.tb_lineno)
+        log("%s at line %d" % (event.exception, event.traceback.tb_lineno))
         log_msg = ("".join(
             traceback.format_tb(event.traceback)
         )).splitlines(True)
